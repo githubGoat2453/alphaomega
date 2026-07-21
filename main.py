@@ -18,16 +18,32 @@ async def safe(coro):
 
 STOPPED = False
 
+async def _run_if_not_stopped(coro):
+    """Run a coroutine only if STOPPED hasn't been set, checked right before execution."""
+    global STOPPED
+    if STOPPED:
+        return
+    return await safe(coro)
+
 async def batch(coros, size=5, delay=0.5):
-    """Run coros in batches of `size` with `delay` seconds between each batch."""
+    """Run coros in batches of `size` with `delay` seconds between each batch.
+
+    Checks STOPPED before each batch, before each individual coroutine, and
+    after each batch/delay so ongoing operations halt immediately once
+    STOPPED is set, rather than only stopping between batches.
+    """
     global STOPPED
     coros = list(coros)
     for i in range(0, len(coros), size):
         if STOPPED:
             break
-        await asyncio.gather(*[safe(c) for c in coros[i:i + size]])
+        await asyncio.gather(*[_run_if_not_stopped(c) for c in coros[i:i + size]])
+        if STOPPED:
+            break
         if i + size < len(coros):
             await asyncio.sleep(delay)
+            if STOPPED:
+                break
 
 @bot.command()
 async def stop(ctx):
@@ -35,8 +51,13 @@ async def stop(ctx):
     global STOPPED
     STOPPED = True
     await ctx.send("🛑 **All operations stopped.**")
-    await asyncio.sleep(2)
+
+@bot.command()
+async def resume(ctx):
+    """Resume operations after a stop"""
+    global STOPPED
     STOPPED = False
+    await ctx.send("▶️ **Operations resumed.**")
 
 # Batch sizes tuned per operation type
 BATCH_MSG   = dict(size=25, delay=0.2)   # sending messages
