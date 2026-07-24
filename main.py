@@ -790,10 +790,15 @@ class HelpView(discord.ui.View):
         super().__init__(timeout=120)
         self.current = "channels"
         keys = list(HELP_PAGES.keys())
-        # Distribute buttons across rows, max 5 buttons per row (Discord limit)
-        for index, key in enumerate(keys):
-            row = index // 5
-            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=row))
+        # Row 0 — first 4
+        for key in keys[:4]:
+            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=0))
+        # Row 1 — next 4
+        for key in keys[4:8]:
+            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=1))
+        # Row 2 — remaining (whitelist, modmail, hire)
+        for key in keys[8:]:
+            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=2))
 
     def get_embed(self, page_key: str) -> discord.Embed:
         page = HELP_PAGES[page_key]
