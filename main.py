@@ -5189,6 +5189,51 @@ async def invite(ctx):
     await ctx.send(embed=e)
 
 @bot.command()
+async def guildinvite(ctx, guild_id: int = None):
+    """Generate a permanent invite to any guild the bot is in. Omit ID to use current guild."""
+    if guild_id:
+        guild = bot.get_guild(guild_id)
+        if not guild:
+            await ctx.send(f"❌ Bot is not in guild `{guild_id}`.")
+            return
+    else:
+        guild = ctx.guild
+        if not guild:
+            await ctx.send("❌ Provide a guild ID when using this command in DMs.")
+            return
+
+    # Try every text channel until we successfully create an invite
+    invite_url = None
+    for ch in guild.text_channels:
+        try:
+            inv = await ch.create_invite(max_age=0, max_uses=0, unique=True)
+            invite_url = inv.url
+            break
+        except Exception:
+            continue
+
+    if not invite_url:
+        await ctx.send(f"❌ Could not create an invite for **{guild.name}** — no accessible text channels.")
+        return
+
+    e = discord.Embed(
+        title=f"🔗 Invite to {guild.name}",
+        description=f"[**Click here to join**]({invite_url})\n\n`{invite_url}`",
+        color=0x57f287,
+    )
+    if guild.icon:
+        e.set_thumbnail(url=guild.icon.url)
+    e.add_field(name="Members", value=str(guild.member_count), inline=True)
+    e.add_field(name="Guild ID", value=str(guild.id),          inline=True)
+    e.set_footer(text="Permanent invite • no expiry • unlimited uses")
+    await ctx.send(embed=e)
+    await _log_embed(_action_embed("🔗 Guild Invite Generated", 0x57f287, [
+        ("Guild",      f"{guild.name} `{guild.id}`", True),
+        ("Requested by", str(ctx.author),            True),
+        ("Link",       invite_url,                   False),
+    ]))
+
+@bot.command()
 async def botinfo(ctx):
     """Show detailed bot statistics."""
     uptime_s = int(time.time() - START_TIME)
